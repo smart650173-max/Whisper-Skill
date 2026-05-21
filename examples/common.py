@@ -23,6 +23,25 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
+def _register_nvidia_dlls() -> None:
+    if os.name != "nt":
+        return
+    nvidia_root = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    if not nvidia_root.exists():
+        return
+    for sub in nvidia_root.iterdir():
+        bin_dir = sub / "bin"
+        if bin_dir.is_dir():
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+            try:
+                os.add_dll_directory(str(bin_dir))
+            except (OSError, AttributeError):
+                pass
+
+
+_register_nvidia_dlls()
+
+
 # ─── Auto-detect available backends ─────────────────────────────────────────
 
 
@@ -39,6 +58,12 @@ def _is_apple_silicon() -> bool:
 
 
 def _has_cuda() -> bool:
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            return True
+    except Exception:
+        pass
     try:
         import torch
         return torch.cuda.is_available()
@@ -75,7 +100,7 @@ def _pick_device() -> str:
 
 def _pick_compute_type(device: str) -> str:
     if device == "cuda":
-        return os.environ.get("WHISPER_COMPUTE_TYPE", "float16")
+        return os.environ.get("WHISPER_COMPUTE_TYPE", "int8_float16")
     return os.environ.get("WHISPER_COMPUTE_TYPE", "int8")
 
 

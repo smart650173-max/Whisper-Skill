@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
     "log_file": None,                    # путь к файлу лога или null = stdout
     "trim_silence_ms": 200,              # обрезать тишину в начале/конце записи
     "min_duration_ms": 300,              # игнорировать слишком короткие записи (промахи кнопкой)
+    "newline_on_pause_sec": 0.7,         # пауза в речи ≥ N сек → перенос строки. 0 = выкл
     # macOS-специфика: pystray/Tk известно жрут CPU в фоне на macOS
     # (NSRunLoop в non-main thread + Tk thread-safety). Этот флаг автоматически
     # отключает show_tray и show_cursor_indicator на macOS, оставляя CLI-вывод
@@ -851,6 +852,34 @@ class State:
     last_dictation_at: float = 0.0  # time.time() последней успешной вставки
 
 
+def build_text_with_pauses(result, pause_sec: float) -> str:
+    """Собрать текст из сегментов транскрипта, ставя перенос строки там,
+    где между сегментами пауза в речи >= pause_sec секунд.
+
+    Whisper отдаёт сегменты с таймкодами (start/end). Если между концом
+    одного сегмента и началом следующего тишина >= порога — значит говорящий
+    сделал паузу, и текст переносится на новую строку. Так диктовка
+    разбивается на строки по смыслу, а не идёт одной простынёй.
+
+    pause_sec <= 0 или нет сегментов с таймкодами → возвращаем плоский текст.
+    """
+    segments = getattr(result, "segments", None) or []
+    if pause_sec <= 0 or len(segments) < 2:
+        return result.text.strip()
+    parts: list[str] = []
+    prev_end = None
+    for seg in segments:
+        seg_text = (seg.text or "").strip()
+        if not seg_text:
+            continue
+        if prev_end is not None:
+            gap = (seg.start or 0.0) - prev_end
+            parts.append("\n" if gap >= pause_sec else " ")
+        parts.append(seg_text)
+        prev_end = seg.end
+    return "".join(parts).strip()
+
+
 def main_loop(cfg: dict, cfg_path: Path):
     from pynput import keyboard
 
@@ -1012,7 +1041,9 @@ def main_loop(cfg: dict, cfg_path: Path):
                     word_timestamps=False,
                     verbose=False,
                 )
-                text = result.text.strip()
+                text = build_text_with_pauses(
+                    result, cfg.get("newline_on_pause_sec", 0.7)
+                )
                 elapsed = time.time() - t0
 
                 if not text:
